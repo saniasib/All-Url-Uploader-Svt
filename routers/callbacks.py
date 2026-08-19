@@ -17,7 +17,7 @@ from services.gallerydl import download_with_gallery_dl
 from utils import text
 from utils.callbacks import RequestCallback, UiCallback
 from utils.logging_config import safe_url_label
-from utils.models import DownloadOption, StoredRequest
+from utils.models import DownloadArtifact, DownloadOption, StoredRequest
 
 router = Router(name="callbacks")
 logger = logging.getLogger(__name__)
@@ -44,8 +44,13 @@ async def request_callback(
     thumbnail_store: ThumbnailStore,
 ) -> None:
     if not query.message:
-        await query.answer()
         return
+
+    # Jawab query di awal agar tidak timeout (query is too old)
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     stored = request_store.load(callback_data.token)
     if not stored:
@@ -56,7 +61,6 @@ async def request_callback(
             callback_data.action,
         )
         await query.message.edit_text(text.REQUEST_EXPIRED)
-        await query.answer()
         return
 
     option = _find_option(stored, callback_data.action)
@@ -68,7 +72,6 @@ async def request_callback(
             callback_data.action,
         )
         await query.message.edit_text(text.REQUEST_EXPIRED)
-        await query.answer()
         return
 
     started_at = datetime.now()
@@ -87,7 +90,31 @@ async def request_callback(
     )
 
     try:
-        if stored.request_type == "direct_download":
+        # Menampung artefak yang akan diupload (bisa 1 file atau banyak file)
+        artifacts_to_upload: list[DownloadArtifact] = []
+
+        if stored.request_type == "gallerydl_download":
+            artifacts = await download_with_gallery_dl(
+                parsed_input=stored.parsed_input,
+                settings=settings,
+                work_dir=work_dir,
+            )
+            # Normalisasi jika gallery_dl mengembalikan list atau single object
+            if isinstance(artifacts, list):
+                artifacts_to_upload.extend(artifacts)
+            else:
+                artifacts_to_upload.append(artifacts)
+
+        elif stored.request_type == "youtube_quick":
+            artifact = await download_quick_youtube(
+                parsed_input=stored.parsed_input,
+                option=option,
+                settings=settings,
+                work_dir=work_dir,
+            )
+            artifacts_to_upload.append(artifact)
+
+        elif stored.request_type == "direct_download":
             artifact = await download_direct_file(
                 status_message=query.message,
                 parsed_input=stored.parsed_input,
@@ -96,19 +123,8 @@ async def request_callback(
                 work_dir=work_dir,
                 suggested_ext=stored.info.get("ext"),
             )
-        elif stored.request_type == "youtube_quick":
-            artifact = await download_quick_youtube(
-                parsed_input=stored.parsed_input,
-                option=option,
-                settings=settings,
-                work_dir=work_dir,
-            )
-        elif stored.request_type == "gallerydl_download":
-            artifact = await download_with_gallery_dl(
-                parsed_input=stored.parsed_input,
-                settings=settings,
-                work_dir=work_dir,
-            )
+            artifacts_to_upload.append(artifact)
+
         else:
             artifact = await download_selected_format(
                 parsed_input=stored.parsed_input,
@@ -117,23 +133,27 @@ async def request_callback(
                 settings=settings,
                 work_dir=work_dir,
             )
+            artifacts_to_upload.append(artifact)
 
-        await upload_artifact(
-            bot=query.bot,
-            status_message=query.message,
-            source_message=query.message.reply_to_message or query.message,
-            artifact=artifact,
-            thumbnail_path=thumbnail_store.get(query.from_user.id),
-            started_at=started_at,
-        )
-        logger.info(
-            "Completed request action | user=%s token=%s file=%s send_type=%s",
-            query.from_user.id,
-            stored.token,
-            artifact.file_name,
-            artifact.send_type,
-        )
-    except Exception as exc:  # pylint: disable=broad-exception-caught  # pragma: no cover - user-facing safety boundary
+        # Upload seluruh artifact secara berurutan
+        for art in artifacts_to_upload:
+            await upload_artifact(
+                bot=query.bot,
+                status_message=query.message,
+                source_message=query.message.reply_to_message or query.message,
+                artifact=art,
+                thumbnail_path=thumbnail_store.get(query.from_user.id),
+                started_at=started_at,
+            )
+            logger.info(
+                "Completed upload for file | user=%s token=%s file=%s send_type=%s",
+                query.from_user.id,
+                stored.token,
+                art.file_name,
+                art.send_type,
+            )
+
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception(
             "Request action failed | user=%s token=%s type=%s option=%s",
             query.from_user.id,
@@ -145,4 +165,3 @@ async def request_callback(
     finally:
         request_store.delete(stored.token)
         logger.info("Cleaned request state | token=%s", stored.token)
-        await query.answer()

@@ -112,9 +112,8 @@ def _command_base(
 
     return command
 
-
-def _pick_downloaded_file(work_dir: Path) -> Path:
-    # Hanya abaikan file metadata/text, jangan abaikan gambar (.jpg, .png, dll.)
+def _pick_all_downloaded_files(work_dir: Path) -> list[Path]:
+    """Mengambil SEMUA file media yang berhasil diunduh, bukan hanya satu."""
     files = [
         path
         for path in work_dir.rglob("*")
@@ -124,28 +123,13 @@ def _pick_downloaded_file(work_dir: Path) -> Path:
     ]
 
     if not files:
-        discovered = sorted(
-            str(path.relative_to(work_dir))
-            for path in work_dir.rglob("*")
-            if path.is_file()
-        )
+        raise RuntimeError("gallery-dl finished but no media file was found")
 
-        logger.warning(
-            "No gallery-dl media file found | work_dir=%s files=%s",
-            work_dir,
-            discovered,
-        )
+    # Urutkan berdasarkan nama agar urutan slide foto tidak acak
+    files.sort(key=lambda item: item.name)
+    return files
 
-        raise RuntimeError(
-            "gallery-dl finished but no media file was found"
-        )
 
-    files.sort(
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    )
-
-    return files[0]
 
 
 def build_gallerydl_options() -> list[DownloadOption]:
@@ -159,11 +143,12 @@ def build_gallerydl_options() -> list[DownloadOption]:
     ]
 
 
+
 async def download_with_gallery_dl(
     parsed_input: ParsedInput,
     settings: Settings,
     work_dir: Path,
-) -> DownloadArtifact:
+) -> list[DownloadArtifact]:
 
     if not settings.gallery_dl_enabled:
         raise RuntimeError("gallery-dl is disabled")
@@ -191,25 +176,28 @@ async def download_with_gallery_dl(
 
     await _run_command(command, cwd=work_dir)
 
-    # Konversi file .webp ke .jpg jika ada
+    # Konversi webp ke jpg jika ada
     _convert_webp_to_jpg(work_dir)
 
-    file_path = _pick_downloaded_file(work_dir)
+    file_paths = _pick_all_downloaded_files(work_dir)
 
-    # Tentukan tipe pengiriman Telegram secara dinamis
-    is_photo = file_path.suffix.lower() in {".jpg", ".jpeg", ".png"}
-    send_type = "photo" if is_photo else "video"
+    artifacts: list[DownloadArtifact] = []
+    for file_path in file_paths:
+        is_photo = file_path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        send_type = "photo" if is_photo else "video"
+
+        artifacts.append(
+            DownloadArtifact(
+                path=file_path,
+                file_name=file_path.name,
+                send_type=send_type,
+                caption=file_path.stem,
+            )
+        )
 
     logger.info(
-        "gallery-dl download complete | file=%s bytes=%s send_type=%s",
-        file_path.name,
-        file_path.stat().st_size,
-        send_type,
+        "gallery-dl download complete | total_files=%s",
+        len(artifacts),
     )
 
-    return DownloadArtifact(
-        path=file_path,
-        file_name=file_path.name,
-        send_type=send_type,
-        caption=file_path.stem,
-    )
+    return artifacts
