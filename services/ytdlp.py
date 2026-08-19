@@ -25,6 +25,8 @@ def _command_base(parsed_input: ParsedInput, settings: Settings) -> list[str]:
         command.extend(["--username", parsed_input.username])
     if parsed_input.password:
         command.extend(["--password", parsed_input.password])
+    if settings.tiktok_cookies:
+        command.extend(["--cookies", settings.tiktok_cookies])
     return command
 
 
