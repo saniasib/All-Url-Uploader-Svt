@@ -33,6 +33,7 @@ class Settings:
     process_max_timeout: int
     gallery_dl_enabled: bool
     gallery_dl_cookies: str
+    tiktok_cookies: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,6 +59,7 @@ class Settings:
         )
 
         gallery_dl_cookies = os.environ.get("GALLERY_DL_COOKIES", "").strip()
+        tiktok_cookies = os.environ.get("TIKTOK_COOKIES", "").strip()
 
         return cls(
             bot_token=bot_token,
@@ -69,6 +71,7 @@ class Settings:
             process_max_timeout=int(os.environ.get("PROCESS_MAX_TIMEOUT", "3700")),
             gallery_dl_enabled=gallery_dl_enabled,
             gallery_dl_cookies=gallery_dl_cookies,
+            tiktok_cookies=tiktok_cookies,
         )
 
     @property
