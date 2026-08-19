@@ -52,6 +52,7 @@ async def _run_command(
 
 
 def _pick_cookie_file() -> str | None:
+    """Sama persis seperti _pick_cookie_file di kode Pyrogram."""
     candidates = [
         Path("cookies.txt"),
         Path("/root/All-Url-Uploader/cookies/tiktok.txt"),
@@ -65,29 +66,38 @@ def _pick_cookie_file() -> str | None:
 
 
 def _convert_webp_to_jpg(folder: Path) -> None:
-    """Mengonversi format WebP ke JPG untuk menghindari error Telegram PHOTO_EXT_INVALID."""
+    """FIX Telegram PHOTO_EXT_INVALID: convert webp -> jpg persis seperti modul Pyrogram."""
+    try:
+        from PIL import Image
+    except Exception as e:
+        logger.warning(f"[webp] PIL not available: {e}")
+        return
+
     for root, _, files in os.walk(folder):
         for fn in files:
-            if fn.lower().endswith(".webp"):
-                src = Path(root) / fn
-                dst = src.with_suffix(".jpg")
-                try:
-                    with Image.open(src) as im:
-                        im.convert("RGB").save(dst, "JPEG", quality=95)
-                    src.unlink()
-                    logger.info("Converted webp to jpg: %s", dst.name)
-                except Exception as e:
-                    logger.warning("Failed to convert webp %s: %s", src.name, e)
+            if not fn.lower().endswith(".webp"):
+                continue
+            src = os.path.join(root, fn)
+            dst = os.path.splitext(src)[0] + ".jpg"
+            try:
+                im = Image.open(src).convert("RGB")
+                im.save(dst, "JPEG", quality=95)
+                os.remove(src)  # hapus webp biar uploader pilih jpg
+                logger.info(f"[webp] converted -> {dst}")
+            except Exception as e:
+                logger.warning(f"[webp] convert failed {src}: {e}")
 
 
 def _command_base(
     parsed_input: ParsedInput,
     settings: Settings,
 ) -> list[str]:
+    # ✅ Dibuat clean dan murni seperti _gallerydl_download di Pyrogram
     command = [
         sys.executable,
         "-m",
         "gallery_dl",
+        "-v",
     ]
 
     if settings.http_proxy:
@@ -103,32 +113,22 @@ def _command_base(
             cookie,
         ])
 
-    command.extend([
-        "--user-agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "-v",
-    ])
-
     return command
 
+
 def _pick_all_downloaded_files(work_dir: Path) -> list[Path]:
-    """Mengambil SEMUA file media yang berhasil diunduh, bukan hanya satu."""
-    files = [
-        path
-        for path in work_dir.rglob("*")
-        if path.is_file()
-        and not path.name.endswith(".part")
-        and path.suffix.lower() not in {".json", ".txt"}
-    ]
+    """Cek ada file di semua subfolder hasil download."""
+    files: list[Path] = []
+    for root, _, filenames in os.walk(work_dir):
+        for fn in sorted(filenames):
+            if fn.endswith(".part") or fn.endswith(".ytdl"):
+                continue
+            files.append(Path(root) / fn)
 
     if not files:
-        raise RuntimeError("gallery-dl finished but no media file was found")
+        raise RuntimeError("gallery-dl finished but no files found")
 
-    # Urutkan berdasarkan nama agar urutan slide foto tidak acak
-    files.sort(key=lambda item: item.name)
     return files
-
-
 
 
 def build_gallerydl_options() -> list[DownloadOption]:
@@ -142,40 +142,38 @@ def build_gallerydl_options() -> list[DownloadOption]:
     ]
 
 
-
 async def download_with_gallery_dl(
     parsed_input: ParsedInput,
     settings: Settings,
     work_dir: Path,
 ) -> list[DownloadArtifact]:
-
     if not settings.gallery_dl_enabled:
         raise RuntimeError("gallery-dl is disabled")
 
     work_dir = work_dir.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    link = parsed_input.source_url or ""
+    # ✅ X lebih stabil pakai twitter.com (sama seperti di Pyrogram)
+    if "x.com" in link:
+        link = link.replace("x.com", "twitter.com", 1)
+
     command = _command_base(parsed_input, settings)
-
-    target_url = parsed_input.source_url
-    if target_url and "x.com" in target_url:
-        target_url = target_url.replace("x.com", "twitter.com", 1)
-
     command.extend([
         "-D",
         str(work_dir),
-        target_url,
+        link,
     ])
 
     logger.info(
         "Starting gallery-dl download | source=%s work_dir=%s",
-        safe_url_label(target_url),
+        safe_url_label(link),
         work_dir,
     )
 
     await _run_command(command, cwd=work_dir)
 
-    # Konversi webp ke jpg jika ada
+    # ✅ Convert webp -> jpg
     _convert_webp_to_jpg(work_dir)
 
     file_paths = _pick_all_downloaded_files(work_dir)
@@ -183,12 +181,15 @@ async def download_with_gallery_dl(
     artifacts: list[DownloadArtifact] = []
     for file_path in file_paths:
         ext = file_path.suffix.lower()
-        
-        # ✅ Klasifikasi tipe kirim Telegram
-        if ext in {".mp4", ".mov", ".webm", ".gif"}:
-            send_type = "animation"  # Dikirim sebagai GIF/Animasi autoplay di Telegram
+
+        if ext in {".mp4", ".mov", ".mkv", ".webm"}:
+            send_type = "video"
+        elif ext in {".gif"}:
+            send_type = "animation"
         elif ext in {".jpg", ".jpeg", ".png"}:
             send_type = "photo"
+        elif ext in {".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac"}:
+            send_type = "audio"
         else:
             send_type = "document"
 
@@ -201,9 +202,5 @@ async def download_with_gallery_dl(
             )
         )
 
-    logger.info(
-        "gallery-dl download complete | total_files=%s",
-        len(artifacts),
-    )
-
+    logger.info("gallery-dl complete | total_files=%s", len(artifacts))
     return artifacts
