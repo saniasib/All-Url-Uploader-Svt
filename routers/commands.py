@@ -2,6 +2,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
+from services.stats import get_system_stats
 from utils.keyboards import about_keyboard, help_keyboard, start_keyboard
 from utils import text
 
@@ -38,6 +39,13 @@ async def about_command(message: Message) -> None:
         reply_markup=about_keyboard(),
         link_preview_options=LinkPreviewOptions(is_disabled=True),
     )
+
+
+@router.message(Command("stats"), F.chat.type == "private")
+async def stats_command(message: Message) -> None:
+    status_msg = await message.answer("<i>Fetching server stats...</i>")
+    stats_text = await get_system_stats()
+    await status_msg.edit_text(stats_text)
 
 
 async def handle_ui_callback(callback: CallbackQuery, action: str) -> None:
