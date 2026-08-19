@@ -71,13 +71,10 @@ def _command_base(
     parsed_input: ParsedInput,
     settings: Settings,
 ) -> list[str]:
-    # SAMA dengan kode YtDlp lama yang kamu kasih:
-    # sys.executable -m gallery_dl
     command = [
         sys.executable,
         "-m",
         "gallery_dl",
-        "-D",
     ]
 
     if settings.http_proxy:
@@ -94,7 +91,9 @@ def _command_base(
             cookie,
         ])
 
-    command.append("-v")
+    command.extend([
+        "-v",
+    ])
 
     return command
 
@@ -163,9 +162,8 @@ async def download_with_gallery_dl(
 
     command = _command_base(parsed_input, settings)
 
-    # Sama dengan kode kamu sebelumnya:
-    # gallery-dl -D OUT_DIR -v URL
     command.extend([
+        "-D",
         str(work_dir),
         parsed_input.source_url,
     ])
