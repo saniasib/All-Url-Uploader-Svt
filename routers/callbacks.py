@@ -13,6 +13,7 @@ from services.request_store import RequestStore
 from services.thumbnail_store import ThumbnailStore
 from services.telegram_uploads import upload_artifact
 from services.ytdlp import download_quick_youtube, download_selected_format
+from services.gallerydl import download_with_gallery_dl
 from utils import text
 from utils.callbacks import RequestCallback, UiCallback
 from utils.logging_config import safe_url_label
@@ -99,6 +100,12 @@ async def request_callback(
             artifact = await download_quick_youtube(
                 parsed_input=stored.parsed_input,
                 option=option,
+                settings=settings,
+                work_dir=work_dir,
+            )
+        elif stored.request_type == "gallerydl_download":
+            artifact = await download_with_gallery_dl(
+                parsed_input=stored.parsed_input,
                 settings=settings,
                 work_dir=work_dir,
             )

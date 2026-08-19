@@ -15,6 +15,7 @@ from services.ytdlp import (
     build_ytdlp_options,
     probe_url,
 )
+from services.gallerydl import build_gallerydl_options
 from utils import text
 from utils.keyboards import format_keyboard
 from utils.logging_config import safe_url_label
@@ -96,12 +97,18 @@ async def intake_message(
     if info:
         options = build_ytdlp_options(info)
         request_type = "ytdlp_selection"
+
         if not options:
             options = build_direct_options(parsed, info=info)
             request_type = "direct_download"
+
     else:
-        options = build_direct_options(parsed, info=None)
-        request_type = "direct_download"
+        if settings.gallery_dl_enabled:
+            options = build_gallerydl_options()
+            request_type = "gallerydl_download"
+        else:
+            options = build_direct_options(parsed, info=None)
+            request_type = "direct_download"
 
     stored = StoredRequest(
         token=token,

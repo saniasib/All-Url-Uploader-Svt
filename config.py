@@ -31,6 +31,8 @@ class Settings:
     chunk_size: int
     http_proxy: str
     process_max_timeout: int
+    gallery_dl_enabled: bool
+    gallery_dl_cookies: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -50,6 +52,13 @@ class Settings:
             os.environ.get("DOWNLOAD_LOCATION", "./DOWNLOADS").strip() or "./DOWNLOADS"
         )
 
+        gallery_dl_enabled = (
+            os.environ.get("GALLERY_DL_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
+        gallery_dl_cookies = os.environ.get("GALLERY_DL_COOKIES", "").strip()
+
         return cls(
             bot_token=bot_token,
             owner_id=owner_id,
@@ -58,6 +67,8 @@ class Settings:
             chunk_size=_parse_chunk_size(os.environ.get("CHUNK_SIZE")),
             http_proxy=os.environ.get("HTTP_PROXY", "").strip(),
             process_max_timeout=int(os.environ.get("PROCESS_MAX_TIMEOUT", "3700")),
+            gallery_dl_enabled=gallery_dl_enabled,
+            gallery_dl_cookies=gallery_dl_cookies,
         )
 
     @property
