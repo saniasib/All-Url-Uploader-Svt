@@ -57,6 +57,19 @@ async def upload_artifact(
                 supports_streaming=True,
                 thumbnail=thumb,
             )
+    elif artifact.send_type == "photo":
+        async with ChatActionSender.upload_photo(bot=bot, chat_id=source_message.chat.id):
+            await source_message.reply_photo(
+                photo=file_input,
+                caption=artifact.caption,
+            )
+    elif artifact.send_type == "animation":
+        async with ChatActionSender.upload_video(bot=bot, chat_id=source_message.chat.id):
+            await source_message.reply_animation(
+                animation=file_input,
+                caption=artifact.caption,
+                thumbnail=thumb,
+            )
     elif artifact.send_type == "audio":
         duration = audio_duration(artifact.path)
         async with ChatActionSender.upload_document(bot=bot, chat_id=source_message.chat.id):

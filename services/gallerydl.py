@@ -183,8 +183,15 @@ async def download_with_gallery_dl(
 
     artifacts: list[DownloadArtifact] = []
     for file_path in file_paths:
-        is_photo = file_path.suffix.lower() in {".jpg", ".jpeg", ".png"}
-        send_type = "photo" if is_photo else "video"
+        ext = file_path.suffix.lower()
+        
+        # ✅ Klasifikasi tipe kirim Telegram
+        if ext in {".mp4", ".mov", ".webm", ".gif"}:
+            send_type = "animation"  # Dikirim sebagai GIF/Animasi autoplay di Telegram
+        elif ext in {".jpg", ".jpeg", ".png"}:
+            send_type = "photo"
+        else:
+            send_type = "document"
 
         artifacts.append(
             DownloadArtifact(
