@@ -103,14 +103,13 @@ def _command_base(
             cookie,
         ])
 
-    # ✅ Gunakan -o / --user-agent yang sesuai standar gallery-dl
     command.extend([
         "--user-agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "-o",
-        "extractor.tiktok.parent-metadata=true",
         "-v",
     ])
+
+    return command
 
     return command
 
