@@ -126,14 +126,30 @@ async def request_callback(
             artifacts_to_upload.append(artifact)
 
         else:
-            artifact = await download_selected_format(
-                parsed_input=stored.parsed_input,
-                option=option,
-                info=stored.info,
-                settings=settings,
-                work_dir=work_dir,
-            )
-            artifacts_to_upload.append(artifact)
+            try:
+                artifact = await download_selected_format(
+                    parsed_input=stored.parsed_input,
+                    option=option,
+                    info=stored.info,
+                    settings=settings,
+                    work_dir=work_dir,
+                )
+                artifacts_to_upload.append(artifact)
+            except Exception as e:
+                # Jika link sosmed gagal 403 di yt-dlp, fallback ke gallery-dl
+                if "403" in str(e) and settings.gallery_dl_enabled:
+                    logger.warning("yt-dlp failed with 403, attempting gallery-dl fallback...")
+                    arts = await download_with_gallery_dl(
+                        parsed_input=stored.parsed_input,
+                        settings=settings,
+                        work_dir=work_dir,
+                    )
+                    if isinstance(arts, list):
+                        artifacts_to_upload.extend(arts)
+                    else:
+                        artifacts_to_upload.append(arts)
+                else:
+                    raise e
 
         # Upload seluruh artifact secara berurutan
         for art in artifacts_to_upload:

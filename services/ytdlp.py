@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 def _command_base(parsed_input: ParsedInput, settings: Settings) -> list[str]:
-    command = ["yt-dlp", "--no-warnings"]
+    command = [
+        "yt-dlp",
+        "--no-warnings",
+        "--user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    ]
     if settings.http_proxy:
         command.extend(["--proxy", settings.http_proxy])
     if parsed_input.username:
