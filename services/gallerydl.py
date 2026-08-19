@@ -6,7 +6,7 @@ from pathlib import Path
 
 from config import Settings
 from utils.logging_config import redact_command, safe_url_label
-from utils.models import DownloadArtifact, ParsedInput
+from utils.models import DownloadArtifact, DownloadOption, ParsedInput
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,15 @@ def _pick_downloaded_file(work_dir: Path) -> Path:
 
     return files[0]
 
-
+def build_gallerydl_options() -> list[DownloadOption]:
+    return [
+        DownloadOption(
+            option_id="gallerydl_download",
+            label="Download",
+            send_type="video",
+            mode="gallerydl",
+        )
+    ]
 async def download_with_gallery_dl(
     parsed_input: ParsedInput,
     settings: Settings,
