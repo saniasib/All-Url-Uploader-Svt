@@ -145,7 +145,7 @@ async def download_tiktok_api(url: str, work_dir: Path) -> list[DownloadArtifact
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
-    
+
     async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
         res = await client.post(api_url, data={"url": url, "count": 12, "cursor": 0, "web": 1, "hd": 1})
         res_json = res.json()
@@ -160,6 +160,8 @@ async def download_tiktok_api(url: str, work_dir: Path) -> list[DownloadArtifact
     # 1. Postingan berupa Slideshow / Carousel Foto
     if "images" in data and data["images"]:
         for idx, img_url in enumerate(data["images"]):
+            if not isinstance(img_url, str) or not img_url.startswith("http"):
+                continue
             img_path = work_dir / f"photo_{idx+1:02d}.jpg"
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 r = await client.get(img_url)
@@ -173,36 +175,51 @@ async def download_tiktok_api(url: str, work_dir: Path) -> list[DownloadArtifact
                 )
             )
 
-        # Download juga audio background-nya jika ada
-        if "music" in data and data["music"]:
-            audio_path = work_dir / f"audio_{data.get('id', 'tiktok')}.mp3"
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                r = await client.get(data["music"])
-                audio_path.write_bytes(r.content)
-            artifacts.append(
-                DownloadArtifact(
-                    path=audio_path,
-                    file_name=audio_path.name,
-                    send_type="audio",
-                    caption=caption,
+        # Cari URL musik yang valid
+        music_url = None
+        if isinstance(data.get("music"), str) and data["music"].startswith("http"):
+            music_url = data["music"]
+        elif isinstance(data.get("music_info"), dict):
+            m_play = data["music_info"].get("play")
+            if isinstance(m_play, str) and m_play.startswith("http"):
+                music_url = m_play
+
+        if music_url:
+            try:
+                audio_path = work_dir / f"audio_{data.get('id', 'tiktok')}.mp3"
+                async with httpx.AsyncClient(follow_redirects=True) as client:
+                    r = await client.get(music_url)
+                    audio_path.write_bytes(r.content)
+                artifacts.append(
+                    DownloadArtifact(
+                        path=audio_path,
+                        file_name=audio_path.name,
+                        send_type="audio",
+                        caption=caption,
+                    )
                 )
-            )
+            except Exception as e:
+                logger.warning("Failed to download TikTok background audio: %s", e)
 
     # 2. Postingan berupa Video biasa / Live Photo clip
     elif "play" in data or "hdplay" in data:
         video_url = data.get("hdplay") or data.get("play")
-        vid_path = work_dir / f"video_{data.get('id', 'tiktok')}.mp4"
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            r = await client.get(video_url)
-            vid_path.write_bytes(r.content)
-        artifacts.append(
-            DownloadArtifact(
-                path=vid_path,
-                file_name=vid_path.name,
-                send_type="video",
-                caption=caption,
+        if isinstance(video_url, str) and video_url.startswith("http"):
+            vid_path = work_dir / f"video_{data.get('id', 'tiktok')}.mp4"
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                r = await client.get(video_url)
+                vid_path.write_bytes(r.content)
+            artifacts.append(
+                DownloadArtifact(
+                    path=vid_path,
+                    file_name=vid_path.name,
+                    send_type="video",
+                    caption=caption,
+                )
             )
-        )
+
+    if not artifacts:
+        raise RuntimeError("No media artifacts could be extracted from TikTok API response")
 
     return artifacts
 
