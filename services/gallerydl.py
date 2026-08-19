@@ -103,12 +103,9 @@ def _command_base(
             cookie,
         ])
 
-    # ✅ Tambahkan konfigurasi extractor agar tidak force ubah link photo ke video
     command.extend([
         "--user-agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "-o",
-        "extractor.tiktok.api=true",
         "-v",
     ])
 
