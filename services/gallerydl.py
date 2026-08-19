@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+import httpx
 from PIL import Image
 
 from config import Settings
@@ -52,7 +53,6 @@ async def _run_command(
 
 
 def _pick_cookie_file() -> str | None:
-    """Sama persis seperti _pick_cookie_file di kode Pyrogram."""
     candidates = [
         Path("cookies.txt"),
         Path("/root/All-Url-Uploader/cookies/tiktok.txt"),
@@ -66,11 +66,10 @@ def _pick_cookie_file() -> str | None:
 
 
 def _convert_webp_to_jpg(folder: Path) -> None:
-    """FIX Telegram PHOTO_EXT_INVALID: convert webp -> jpg persis seperti modul Pyrogram."""
     try:
         from PIL import Image
     except Exception as e:
-        logger.warning(f"[webp] PIL not available: {e}")
+        logger.warning("[webp] PIL not available: %s", e)
         return
 
     for root, _, files in os.walk(folder):
@@ -82,17 +81,16 @@ def _convert_webp_to_jpg(folder: Path) -> None:
             try:
                 im = Image.open(src).convert("RGB")
                 im.save(dst, "JPEG", quality=95)
-                os.remove(src)  # hapus webp biar uploader pilih jpg
-                logger.info(f"[webp] converted -> {dst}")
+                os.remove(src)
+                logger.info("[webp] converted -> %s", dst)
             except Exception as e:
-                logger.warning(f"[webp] convert failed {src}: {e}")
+                logger.warning("[webp] convert failed %s: %s", src, e)
 
 
 def _command_base(
     parsed_input: ParsedInput,
     settings: Settings,
 ) -> list[str]:
-    # ✅ Dibuat clean dan murni seperti _gallerydl_download di Pyrogram
     command = [
         sys.executable,
         "-m",
@@ -117,7 +115,6 @@ def _command_base(
 
 
 def _pick_all_downloaded_files(work_dir: Path) -> list[Path]:
-    """Cek ada file di semua subfolder hasil download."""
     files: list[Path] = []
     for root, _, filenames in os.walk(work_dir):
         for fn in sorted(filenames):
@@ -142,6 +139,74 @@ def build_gallerydl_options() -> list[DownloadOption]:
     ]
 
 
+async def download_tiktok_api(url: str, work_dir: Path) -> list[DownloadArtifact]:
+    """Fallback download TikTok foto & video tanpa terpengaruh WAF 403."""
+    api_url = "https://www.tikwm.com/api/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
+        res = await client.post(api_url, data={"url": url, "count": 12, "cursor": 0, "web": 1, "hd": 1})
+        res_json = res.json()
+        data = res_json.get("data", {})
+
+    if not data:
+        raise RuntimeError("TikTok API fallback returned empty data")
+
+    artifacts: list[DownloadArtifact] = []
+    caption = data.get("title", "")
+
+    # 1. Postingan berupa Slideshow / Carousel Foto
+    if "images" in data and data["images"]:
+        for idx, img_url in enumerate(data["images"]):
+            img_path = work_dir / f"photo_{idx+1:02d}.jpg"
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                r = await client.get(img_url)
+                img_path.write_bytes(r.content)
+            artifacts.append(
+                DownloadArtifact(
+                    path=img_path,
+                    file_name=img_path.name,
+                    send_type="photo",
+                    caption=caption,
+                )
+            )
+
+        # Download juga audio background-nya jika ada
+        if "music" in data and data["music"]:
+            audio_path = work_dir / f"audio_{data.get('id', 'tiktok')}.mp3"
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                r = await client.get(data["music"])
+                audio_path.write_bytes(r.content)
+            artifacts.append(
+                DownloadArtifact(
+                    path=audio_path,
+                    file_name=audio_path.name,
+                    send_type="audio",
+                    caption=caption,
+                )
+            )
+
+    # 2. Postingan berupa Video biasa / Live Photo clip
+    elif "play" in data or "hdplay" in data:
+        video_url = data.get("hdplay") or data.get("play")
+        vid_path = work_dir / f"video_{data.get('id', 'tiktok')}.mp4"
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            r = await client.get(video_url)
+            vid_path.write_bytes(r.content)
+        artifacts.append(
+            DownloadArtifact(
+                path=vid_path,
+                file_name=vid_path.name,
+                send_type="video",
+                caption=caption,
+            )
+        )
+
+    return artifacts
+
+
 async def download_with_gallery_dl(
     parsed_input: ParsedInput,
     settings: Settings,
@@ -154,7 +219,6 @@ async def download_with_gallery_dl(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     link = parsed_input.source_url or ""
-    # ✅ X lebih stabil pakai twitter.com (sama seperti di Pyrogram)
     if "x.com" in link:
         link = link.replace("x.com", "twitter.com", 1)
 
@@ -171,36 +235,48 @@ async def download_with_gallery_dl(
         work_dir,
     )
 
-    await _run_command(command, cwd=work_dir)
+    try:
+        await _run_command(command, cwd=work_dir)
+        _convert_webp_to_jpg(work_dir)
+        file_paths = _pick_all_downloaded_files(work_dir)
 
-    # ✅ Convert webp -> jpg
-    _convert_webp_to_jpg(work_dir)
+        artifacts: list[DownloadArtifact] = []
+        for file_path in file_paths:
+            ext = file_path.suffix.lower()
 
-    file_paths = _pick_all_downloaded_files(work_dir)
+            if ext in {".mp4", ".mov", ".mkv", ".webm"}:
+                send_type = "video"
+            elif ext in {".gif"}:
+                send_type = "animation"
+            elif ext in {".jpg", ".jpeg", ".png"}:
+                send_type = "photo"
+            elif ext in {".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac"}:
+                send_type = "audio"
+            else:
+                send_type = "document"
 
-    artifacts: list[DownloadArtifact] = []
-    for file_path in file_paths:
-        ext = file_path.suffix.lower()
-
-        if ext in {".mp4", ".mov", ".mkv", ".webm"}:
-            send_type = "video"
-        elif ext in {".gif"}:
-            send_type = "animation"
-        elif ext in {".jpg", ".jpeg", ".png"}:
-            send_type = "photo"
-        elif ext in {".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac"}:
-            send_type = "audio"
-        else:
-            send_type = "document"
-
-        artifacts.append(
-            DownloadArtifact(
-                path=file_path,
-                file_name=file_path.name,
-                send_type=send_type,
-                caption=file_path.stem,
+            artifacts.append(
+                DownloadArtifact(
+                    path=file_path,
+                    file_name=file_path.name,
+                    send_type=send_type,
+                    caption=file_path.stem,
+                )
             )
-        )
 
-    logger.info("gallery-dl complete | total_files=%s", len(artifacts))
-    return artifacts
+        logger.info("gallery-dl complete | total_files=%s", len(artifacts))
+        return artifacts
+
+    except Exception as exc:
+        is_tiktok = any(h in link.lower() for h in ("tiktok.com", "vt.tiktok.com", "vm.tiktok.com"))
+        
+        # ⬇️ Fallback otomatis ke API jika gallery-dl gagal/kena 403 pada TikTok
+        if is_tiktok:
+            logger.warning(
+                "gallery-dl failed for TikTok, using TikTok API fallback | url=%s error=%s",
+                link,
+                exc,
+            )
+            return await download_tiktok_api(link, work_dir)
+        
+        raise exc
