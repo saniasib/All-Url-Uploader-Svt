@@ -34,35 +34,6 @@ def _is_gallery_site(link: str) -> bool:
     ))
 
 
-def _result_has_any_video(result: dict) -> bool:
-    """Cek apakah hasil probe yt-dlp benar-benar mengandung format video."""
-    if not isinstance(result, dict):
-        return False
-
-    entries = result.get("entries")
-    if not entries:
-        fmts = result.get("formats") or []
-        for f in fmts:
-            vcodec = (f.get("vcodec") or "").lower()
-            if vcodec and vcodec != "none":
-                return True
-            if f.get("height") or f.get("video_ext") not in (None, "none"):
-                return True
-        return False
-
-    for e in entries:
-        if not e:
-            continue
-        fmts = e.get("formats") or []
-        for f in fmts:
-            vcodec = (f.get("vcodec") or "").lower()
-            if vcodec and vcodec != "none":
-                return True
-        if (e.get("vcodec") or "").lower() not in ("", "none"):
-            return True
-    return False
-
-
 @router.message(F.chat.type == "private", F.text)
 async def intake_message(
     message: Message,
@@ -98,6 +69,7 @@ async def intake_message(
     parsed = parse_user_input(raw_text, message.entities)
     status_message = await message.reply(text.PROCESSING)
 
+    # 1. YouTube Quick Handling
     if is_probable_youtube_url(parsed.source_url):
         token = request_store.create_token()
         stored = StoredRequest(
@@ -107,19 +79,13 @@ async def intake_message(
             options=build_quick_youtube_options(),
         )
         request_store.save(stored)
-        logger.info(
-            "Prepared quick YouTube request | user=%s token=%s source=%s options=%s",
-            message.from_user.id,
-            token,
-            safe_url_label(parsed.source_url),
-            len(stored.options),
-        )
         await status_message.edit_text(
             text.QUICK_CHOICE,
             reply_markup=format_keyboard(token, stored.options),
         )
         return
 
+    # 2. Probe dengan yt-dlp sebagai parser utama
     try:
         info = await probe_url(parsed, settings)
     except RuntimeError as exc:
@@ -133,15 +99,12 @@ async def intake_message(
 
     token = request_store.create_token()
 
-    # ✅ Logika penyesuaian fallback jika merupakan Carousel IG/TikTok/X tanpa video
-    if info and _is_gallery_site(parsed.source_url) and not _result_has_any_video(info) and settings.gallery_dl_enabled:
-        logger.info("Source is gallery/photo only, routing to gallery-dl | source=%s", parsed.source_url)
-        options = build_gallerydl_options()
-        request_type = "gallerydl_download"
-    elif info:
+    # 3. Logika Prioritas Utama: yt-dlp -> Fallback: gallery-dl -> Fallback: direct download
+    if info:
         options = build_ytdlp_options(info)
         request_type = "ytdlp_selection"
 
+        # Jika yt-dlp probe sukses tapi list format kosong
         if not options:
             if settings.gallery_dl_enabled and _is_gallery_site(parsed.source_url):
                 options = build_gallerydl_options()
@@ -149,8 +112,11 @@ async def intake_message(
             else:
                 options = build_direct_options(parsed, info=info)
                 request_type = "direct_download"
+
+    # Jika yt-dlp probe gagal total (misal photo TikTok / carousel IG yang Unsupported URL di yt-dlp)
     else:
         if settings.gallery_dl_enabled and _is_gallery_site(parsed.source_url):
+            logger.info("yt-dlp failed, falling back to gallery-dl | source=%s", parsed.source_url)
             options = build_gallerydl_options()
             request_type = "gallerydl_download"
         else:
@@ -165,6 +131,7 @@ async def intake_message(
         info=info or {},
     )
     request_store.save(stored)
+
     logger.info(
         "Prepared request | user=%s token=%s type=%s source=%s options=%s title=%s",
         message.from_user.id,
@@ -174,6 +141,7 @@ async def intake_message(
         len(options),
         (info or {}).get("title", "-"),
     )
+
     await status_message.edit_text(
         text.FORMAT_SELECTION,
         reply_markup=format_keyboard(token, options),
