@@ -310,20 +310,30 @@ async def download_selected_format(
         )
         send_type = "audio"
     else:
+        # =========================================================================
+        # ⬇️ BAGIAN INI YANG DIGANTI ⬇️
+        # =========================================================================
         format_selector = option.format_id or "best"
-        if "youtube" in parsed_input.source_url or "youtu.be" in parsed_input.source_url:
+        is_yt = "youtube" in parsed_input.source_url or "youtu.be" in parsed_input.source_url
+        if is_yt:
             format_selector = f"{format_selector}+bestaudio"
-        command.extend(
-            [
-                "-f",
-                format_selector,
-                "--embed-subs",
-                "-o",
-                output_template,
-                parsed_input.source_url,
-            ]
-        )
+
+        command.extend([
+            "-f",
+            format_selector,
+        ])
+
+        # Hanya pasang embed-subs untuk YouTube agar tidak memicu error di TikTok/IG
+        if is_yt:
+            command.append("--embed-subs")
+
+        command.extend([
+            "-o",
+            output_template,
+            parsed_input.source_url,
+        ])
         send_type = option.send_type
+        # =========================================================================
 
     logger.info(
         "Starting yt-dlp format download | source=%s mode=%s format=%s send_type=%s work_dir=%s",

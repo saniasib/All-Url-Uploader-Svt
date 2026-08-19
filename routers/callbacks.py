@@ -5,7 +5,7 @@ from datetime import datetime
 
 from aiogram import Router
 from aiogram.types import CallbackQuery
-
+import html
 from config import Settings
 from routers.commands import handle_ui_callback
 from services.direct_downloads import download_direct_file
@@ -136,9 +136,23 @@ async def request_callback(
                 )
                 artifacts_to_upload.append(artifact)
             except Exception as e:
-                # Jika link sosmed gagal 403 di yt-dlp, fallback ke gallery-dl
-                if "403" in str(e) and settings.gallery_dl_enabled:
-                    logger.warning("yt-dlp failed with 403, attempting gallery-dl fallback...")
+                err_lower = str(e).lower()
+                is_extractor_issue = any(
+                    k in err_lower for k in (
+                        "403",
+                        "unexpected response",
+                        "unable to extract",
+                        "no video formats found",
+                        "no formats",
+                    )
+                )
+
+                if is_extractor_issue and settings.gallery_dl_enabled:
+                    logger.warning(
+                        "yt-dlp extractor failed, falling back to gallery-dl | url=%s error=%s",
+                        stored.parsed_input.source_url,
+                        e,
+                    )
                     arts = await download_with_gallery_dl(
                         parsed_input=stored.parsed_input,
                         settings=settings,
@@ -177,7 +191,8 @@ async def request_callback(
             stored.request_type,
             option.option_id,
         )
-        await query.message.edit_text(f"{text.DOWNLOAD_FAILED}\n<code>{exc}</code>")
+        # ⬇️ Ganti baris di bawah ini ⬇️
+        await query.message.edit_text(f"{text.DOWNLOAD_FAILED}\n<code>{html.escape(str(exc))}</code>")
     finally:
         request_store.delete(stored.token)
         logger.info("Cleaned request state | token=%s", stored.token)
