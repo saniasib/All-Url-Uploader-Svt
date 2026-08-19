@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sys
 from pathlib import Path
 
 from config import Settings
@@ -40,7 +42,7 @@ async def _run_command(
             "gallery-dl command failed | cwd=%s command=%s error=%s",
             cwd,
             redact_command(command),
-            error_text.splitlines()[0],
+            error_text.splitlines()[0] if error_text else error_text,
         )
 
         raise RuntimeError(error_text)
@@ -48,13 +50,34 @@ async def _run_command(
     return stdout_text, stderr_text
 
 
+def _pick_cookie_file() -> str | None:
+    """
+    Sama seperti implementasi gallery-dl yang sebelumnya berhasil.
+    Cari cookies.txt dari working directory aplikasi.
+    """
+    candidates = [
+        Path("cookies.txt"),
+        Path("/root/All-Url-Uploader/cookies/tiktok.txt"),
+    ]
+
+    for cookie in candidates:
+        if cookie.exists():
+            return str(cookie)
+
+    return None
+
+
 def _command_base(
     parsed_input: ParsedInput,
     settings: Settings,
 ) -> list[str]:
+    # SAMA dengan kode YtDlp lama yang kamu kasih:
+    # sys.executable -m gallery_dl
     command = [
-        "gallery-dl",
-        "--no-input",
+        sys.executable,
+        "-m",
+        "gallery_dl",
+        "-D",
     ]
 
     if settings.http_proxy:
@@ -63,35 +86,49 @@ def _command_base(
             settings.http_proxy,
         ])
 
-    if settings.gallery_dl_cookies:
+    cookie = _pick_cookie_file()
+
+    if cookie:
         command.extend([
             "--cookies",
-            settings.gallery_dl_cookies,
+            cookie,
         ])
+
+    command.append("-v")
 
     return command
 
 
 def _pick_downloaded_file(work_dir: Path) -> Path:
-    ignored_extensions = {
-        ".json",
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp",
-        ".txt",
-    }
-
     files = [
         path
         for path in work_dir.rglob("*")
         if path.is_file()
         and not path.name.endswith(".part")
-        and path.suffix.lower() not in ignored_extensions
+        and path.suffix.lower() not in {
+            ".json",
+            ".jpg",
+            ".jpeg",
+            ".png",
+        }
     ]
 
     if not files:
-        raise RuntimeError("gallery-dl did not produce a media file")
+        discovered = sorted(
+            str(path.relative_to(work_dir))
+            for path in work_dir.rglob("*")
+            if path.is_file()
+        )
+
+        logger.warning(
+            "No gallery-dl media file found | work_dir=%s files=%s",
+            work_dir,
+            discovered,
+        )
+
+        raise RuntimeError(
+            "gallery-dl finished but no media file was found"
+        )
 
     files.sort(
         key=lambda item: item.stat().st_mtime,
@@ -99,6 +136,7 @@ def _pick_downloaded_file(work_dir: Path) -> Path:
     )
 
     return files[0]
+
 
 def build_gallerydl_options() -> list[DownloadOption]:
     return [
@@ -109,11 +147,14 @@ def build_gallerydl_options() -> list[DownloadOption]:
             mode="gallerydl",
         )
     ]
+
+
 async def download_with_gallery_dl(
     parsed_input: ParsedInput,
     settings: Settings,
     work_dir: Path,
 ) -> DownloadArtifact:
+
     if not settings.gallery_dl_enabled:
         raise RuntimeError("gallery-dl is disabled")
 
@@ -122,8 +163,9 @@ async def download_with_gallery_dl(
 
     command = _command_base(parsed_input, settings)
 
+    # Sama dengan kode kamu sebelumnya:
+    # gallery-dl -D OUT_DIR -v URL
     command.extend([
-        "--directory",
         str(work_dir),
         parsed_input.source_url,
     ])
