@@ -5,7 +5,6 @@ from datetime import datetime
 
 from aiogram import Router
 from aiogram.types import CallbackQuery
-import html
 from config import Settings
 from routers.commands import handle_ui_callback
 from services.direct_downloads import download_direct_file
@@ -144,6 +143,7 @@ async def request_callback(
                         "unable to extract",
                         "no video formats found",
                         "no formats",
+                        "redirect to login",
                     )
                 )
 
@@ -191,8 +191,7 @@ async def request_callback(
             stored.request_type,
             option.option_id,
         )
-        # ⬇️ Ganti baris di bawah ini ⬇️
-        await query.message.edit_text(f"{text.DOWNLOAD_FAILED}\n<code>{html.escape(str(exc))}</code>")
+        await query.message.edit_text(text.DOWNLOAD_FAILED)
     finally:
         request_store.delete(stored.token)
         logger.info("Cleaned request state | token=%s", stored.token)

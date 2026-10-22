@@ -55,8 +55,14 @@ async def _run_command(
 def _pick_cookie_file() -> str | None:
     candidates = [
         Path("cookies.txt"),
-        Path("/root/All-Url-Uploader/cookies/tiktok.txt"),
+        # Path("/root/All-Url-Uploader/cookies/tiktok.txt"),  # <-- disabled: TikTok cookies cause IG login redirect
     ]
+
+    # Try GALLERY_DL_COOKIES env var first (set in config.py)
+    import os
+    env_cookie = os.environ.get("GALLERY_DL_COOKIES", "").strip()
+    if env_cookie and Path(env_cookie).exists():
+        return env_cookie
 
     for cookie in candidates:
         if cookie.exists():
