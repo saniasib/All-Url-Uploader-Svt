@@ -13,7 +13,7 @@ from routers.commands import handle_ui_callback
 from services.direct_downloads import download_direct_file
 from services.request_store import RequestStore
 from services.thumbnail_store import ThumbnailStore
-from services.telegram_uploads import upload_artifact
+from services.telegram_uploads import upload_artifact, upload_artifacts_batch
 from services.ytdlp import download_quick_youtube, download_selected_format
 from services.gallerydl import download_with_gallery_dl
 from utils import text
