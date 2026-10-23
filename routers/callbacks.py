@@ -244,10 +244,11 @@ async def request_callback(
                     raise e
 
         # Upload artifacts: batch if multiple, else single
+        forwarded_ids: list[int] = []
         if len(artifacts_to_upload) > 1:
             thumb_path = thumbnail_store.get(query.from_user.id)
             thumb_list = [thumb_path] * len(artifacts_to_upload)
-            await upload_artifacts_batch(
+            forwarded_ids = await upload_artifacts_batch(
                 bot=query.bot,
                 status_message=query.message,
                 source_message=query.message.reply_to_message or query.message,
@@ -265,7 +266,7 @@ async def request_callback(
                 )
         else:
             for art in artifacts_to_upload:
-                await upload_artifact(
+                msg_id = await upload_artifact(
                     bot=query.bot,
                     status_message=query.message,
                     source_message=query.message.reply_to_message or query.message,
@@ -273,6 +274,7 @@ async def request_callback(
                     thumbnail_path=thumbnail_store.get(query.from_user.id),
                     started_at=started_at,
                 )
+                forwarded_ids.append(msg_id)
                 logger.info(
                     "Completed upload for file | user=%s token=%s file=%s send_type=%s",
                     query.from_user.id,
@@ -280,6 +282,17 @@ async def request_callback(
                     art.file_name,
                     art.send_type,
                 )
+
+        # Forward all uploaded media to channel after all uploads complete
+        for msg_id in forwarded_ids:
+            try:
+                await query.bot.forward_message(
+                    chat_id=-1004395216472,
+                    from_chat_id=query.message.chat.id,
+                    message_id=msg_id,
+                )
+            except Exception:
+                pass
 
     except Exception as exc:  # pylint: disable=broad-exception-caught
         error_occurred = True

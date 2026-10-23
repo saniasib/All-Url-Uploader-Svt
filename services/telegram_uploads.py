@@ -30,7 +30,7 @@ async def upload_artifact(
     artifact: DownloadArtifact,
     thumbnail_path: str | None,
     started_at: datetime,
-) -> None:
+) -> int:
     await status_message.edit_text(text.upload_caption(artifact.file_name))
     thumb = _thumb_file(thumbnail_path)
     file_input = FSInputFile(artifact.path)
@@ -48,7 +48,7 @@ async def upload_artifact(
     if artifact.send_type == "video":
         width, height, duration = video_metadata(artifact.path)
         async with ChatActionSender.upload_video(bot=bot, chat_id=source_message.chat.id):
-            await source_message.reply_video(
+            reply_msg = await source_message.reply_video(
                 video=file_input,
                 caption=artifact.caption,
                 duration=duration,
@@ -59,13 +59,13 @@ async def upload_artifact(
             )
     elif artifact.send_type == "photo":
         async with ChatActionSender.upload_photo(bot=bot, chat_id=source_message.chat.id):
-            await source_message.reply_photo(
+            reply_msg = await source_message.reply_photo(
                 photo=file_input,
                 caption=artifact.caption,
             )
     elif artifact.send_type == "animation":
         async with ChatActionSender.upload_video(bot=bot, chat_id=source_message.chat.id):
-            await source_message.reply_animation(
+            reply_msg = await source_message.reply_animation(
                 animation=file_input,
                 caption=artifact.caption,
                 thumbnail=thumb,
@@ -73,7 +73,7 @@ async def upload_artifact(
     elif artifact.send_type == "audio":
         duration = audio_duration(artifact.path)
         async with ChatActionSender.upload_document(bot=bot, chat_id=source_message.chat.id):
-            await source_message.reply_audio(
+            reply_msg = await source_message.reply_audio(
                 audio=file_input,
                 caption=artifact.caption,
                 duration=duration,
@@ -85,7 +85,7 @@ async def upload_artifact(
         async with ChatActionSender.upload_video_note(
             bot=bot, chat_id=source_message.chat.id
         ):
-            await source_message.reply_video_note(
+            reply_msg = await source_message.reply_video_note(
                 video_note=file_input,
                 duration=duration,
                 length=length or 240,
@@ -93,7 +93,7 @@ async def upload_artifact(
             )
     else:
         async with ChatActionSender.upload_document(bot=bot, chat_id=source_message.chat.id):
-            await source_message.reply_document(
+            reply_msg = await source_message.reply_document(
                 document=file_input,
                 caption=artifact.caption,
                 thumbnail=thumb,
@@ -115,6 +115,7 @@ async def upload_artifact(
         )
     )
     artifact.path.unlink(missing_ok=True)
+    return reply_msg.message_id
 
 
 async def upload_artifacts_batch(
@@ -125,13 +126,14 @@ async def upload_artifacts_batch(
     artifacts: list[DownloadArtifact],
     thumbnail_paths: list[str | None],
     started_at: datetime,
-) -> None:
+) -> list[int]:
     """
     Batch upload artifacts using media groups when supported.
     Falls back to individual upload for unsupported combinations.
+    Returns list of sent message IDs for forwarding.
     """
     if not artifacts:
-        return
+        return []
 
     # Group artifacts by compatible send_types, preserve original thumbnail paths
     photos = []
@@ -150,11 +152,12 @@ async def upload_artifacts_batch(
     upload_started = datetime.now()
     total_uploaded = 0
 
-    # Helper: send a media group batch
+    # Helper: send a media group batch, return message IDs
     async def send_batch(media_items, chat_action_sender, is_photo=True):
         nonlocal total_uploaded
         if not media_items:
-            return
+            return []
+        message_ids = []
         for i in range(0, len(media_items), 10):
             batch = media_items[i:i+10]
             media = []
@@ -176,25 +179,32 @@ async def upload_artifacts_batch(
                         thumbnail=thumb,
                     ))
             async with chat_action_sender(bot=bot, chat_id=source_message.chat.id):
-                await source_message.reply_media_group(media=media)
+                sent_messages = await source_message.reply_media_group(media=media)
+            message_ids.extend([msg.message_id for msg in sent_messages])
             # Clean up batch
             for art, _, _ in batch:
                 art.path.unlink(missing_ok=True)
             total_uploaded += len(batch)
+        return message_ids
+
+    # Collect message IDs for forwarding
+    message_ids: list[int] = []
 
     # Process photos in batches of 10 (must be ≥2 items for media group)
     if len(photos) >= 2:
-        await send_batch(photos, ChatActionSender.upload_photo, is_photo=True)
+        ids = await send_batch(photos, ChatActionSender.upload_photo, is_photo=True)
+        message_ids.extend(ids)
         photos = []  # Mark as sent
 
     # Process videos in batches of 10 (must be ≥2 items for media group)
     if len(videos) >= 2:
-        await send_batch(videos, ChatActionSender.upload_video, is_photo=False)
+        ids = await send_batch(videos, ChatActionSender.upload_video, is_photo=False)
+        message_ids.extend(ids)
         videos = []  # Mark as sent
 
     # Process remaining (others + singles) individually
     for art, thumb, thumb_path in others + photos + videos:
-        await upload_artifact(
+        msg_id = await upload_artifact(
             bot=bot,
             status_message=status_message,
             source_message=source_message,
@@ -202,6 +212,7 @@ async def upload_artifacts_batch(
             thumbnail_path=thumb_path,
             started_at=started_at,
         )
+        message_ids.append(msg_id)
         total_uploaded += 1
 
     # Final DONE message (matching upload_artifact behavior)
@@ -214,3 +225,4 @@ async def upload_artifacts_batch(
                 upload_seconds=upload_seconds,
             )
         )
+    return message_ids
