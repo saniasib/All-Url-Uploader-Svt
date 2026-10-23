@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from services.progress import format_download_progress
 from datetime import datetime
 
 from aiogram import Router
 from aiogram.types import CallbackQuery
+from typing import Callable, Awaitable
 from config import Settings
 from routers.commands import handle_ui_callback
 from services.direct_downloads import download_direct_file
@@ -17,6 +19,9 @@ from utils import text
 from utils.callbacks import RequestCallback, UiCallback
 from utils.logging_config import safe_url_label
 from utils.models import DownloadArtifact, DownloadOption, StoredRequest
+
+async def _update_progress(query: CallbackQuery, data: dict) -> None:
+    await query.message.edit_text(format_download_progress(data))
 
 router = Router(name="callbacks")
 logger = logging.getLogger(__name__)
@@ -76,6 +81,9 @@ async def request_callback(
     started_at = datetime.now()
     work_dir = request_store.work_directory(stored.token)
 
+    async def progress_cb(data: dict) -> None:
+        await _update_progress(query, data)
+
     file_name = stored.parsed_input.custom_file_name or "downloaded-file"
     await query.message.edit_text(text.download_caption(file_name))
     logger.info(
@@ -97,6 +105,7 @@ async def request_callback(
                 parsed_input=stored.parsed_input,
                 settings=settings,
                 work_dir=work_dir,
+                progress_callback=progress_cb,
             )
             # Normalisasi jika gallery_dl mengembalikan list atau single object
             if isinstance(artifacts, list):
@@ -110,6 +119,7 @@ async def request_callback(
                 option=option,
                 settings=settings,
                 work_dir=work_dir,
+                progress_callback=progress_cb,
             )
             artifacts_to_upload.append(artifact)
 
@@ -132,6 +142,7 @@ async def request_callback(
                     info=stored.info,
                     settings=settings,
                     work_dir=work_dir,
+                    progress_callback=progress_cb,
                 )
                 artifacts_to_upload.append(artifact)
             except Exception as e:
@@ -157,6 +168,7 @@ async def request_callback(
                         parsed_input=stored.parsed_input,
                         settings=settings,
                         work_dir=work_dir,
+                        progress_callback=progress_cb,
                     )
                     if isinstance(arts, list):
                         artifacts_to_upload.extend(arts)
@@ -195,3 +207,7 @@ async def request_callback(
     finally:
         request_store.delete(stored.token)
         logger.info("Cleaned request state | token=%s", stored.token)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass

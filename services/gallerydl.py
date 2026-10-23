@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Callable, Awaitable
 import httpx
 from PIL import Image
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 async def _run_command(
     command: list[str],
     cwd: Path | None = None,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> tuple[str, str]:
     logger.debug(
         "Running gallery-dl command | cwd=%s command=%s",
@@ -32,10 +34,51 @@ async def _run_command(
         stderr=asyncio.subprocess.PIPE,
     )
 
-    stdout, stderr = await process.communicate()
+    stdout_lines = []
+    stderr_lines = []
+    while True:
+        # Read from stdout
+        stdout_line = await process.stdout.readline()
+        if stdout_line:
+            line_text = stdout_line.decode(errors="replace").strip()
+            stdout_lines.append(line_text)
+            # Parse gallery-dl progress from stdout
+            # Example: "Downloading https://... 10%"
+            if progress_callback and "Downloading" in line_text and "%" in line_text:
+                try:
+                    # Extract percentage from line like "Downloading URL 10%"
+                    parts = line_text.split()
+                    for i, part in enumerate(parts):
+                        if part.endswith('%'):
+                            percentage_str = part[:-1]
+                            percentage = float(percentage_str)
+                            await progress_callback({
+                                "status": "downloading",
+                                "percentage": percentage,
+                                "downloaded": None,  # gallery-dl doesn't give explicit downloaded size in this format
+                                "total": None,
+                                "speed": None,
+                                "eta": None,
+                            })
+                            break
+                except (ValueError, IndexError):
+                    pass  # Ignore parsing errors
+        
+        # Read from stderr
+        stderr_line = await process.stderr.readline()
+        if stderr_line:
+            line_text = stderr_line.decode(errors="replace").strip()
+            stderr_lines.append(line_text)
 
-    stdout_text = stdout.decode(errors="replace").strip()
-    stderr_text = stderr.decode(errors="replace").strip()
+        # Break when both streams are empty and process ended
+        if not stdout_line and not stderr_line:
+            if process.returncode is not None:
+                break
+            # Small sleep to prevent busy waiting
+            await asyncio.sleep(0.01)
+
+    stdout_text = "\n".join(stdout_lines).strip()
+    stderr_text = "\n".join(stderr_lines).strip()
 
     if process.returncode != 0:
         error_text = stderr_text or stdout_text or "gallery-dl failed"
@@ -48,7 +91,6 @@ async def _run_command(
         )
 
         raise RuntimeError(error_text)
-
     return stdout_text, stderr_text
 
 
@@ -234,6 +276,7 @@ async def download_with_gallery_dl(
     parsed_input: ParsedInput,
     settings: Settings,
     work_dir: Path,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> list[DownloadArtifact]:
     if not settings.gallery_dl_enabled:
         raise RuntimeError("gallery-dl is disabled")
@@ -259,7 +302,7 @@ async def download_with_gallery_dl(
     )
 
     try:
-        await _run_command(command, cwd=work_dir)
+        await _run_command(command, cwd=work_dir, progress_callback=progress_callback)
         _convert_webp_to_jpg(work_dir)
         file_paths = _pick_all_downloaded_files(work_dir)
 

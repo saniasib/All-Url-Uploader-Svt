@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import time
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Callable, Awaitable
 
 from config import Settings
-from services.progress import humanbytes
+from services.progress import format_download_progress, humanbytes
 from utils.logging_config import redact_command, safe_url_label
 from utils.models import DownloadArtifact, DownloadOption, ParsedInput
 
@@ -35,7 +38,11 @@ def _command_base(parsed_input: ParsedInput, settings: Settings) -> list[str]:
     return command
 
 
-async def _run_command(command: list[str], cwd: Path | None = None) -> tuple[str, str]:
+async def _run_command(
+    command: list[str],
+    cwd: Path | None = None,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
+) -> tuple[str, str]:
     logger.debug("Running yt-dlp command | cwd=%s command=%s", cwd, redact_command(command))
     process = await asyncio.create_subprocess_exec(
         *command,
@@ -43,9 +50,39 @@ async def _run_command(command: list[str], cwd: Path | None = None) -> tuple[str
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+
+    stderr_data = b""
+    while True:
+        line = await process.stderr.readline()
+        if not line:
+            break
+        line_text = line.decode(errors="replace").strip()
+        stderr_data += line
+        # Parse yt-dlp progress lines: [download] 54.2% of 1.23MiB at 3.45MiB/s ETA 00:02
+        progress_match = re.match(
+            r"\[download\]\s+([\d.]+)%\s+of\s+([\d.]+)\s+([KMGT]?i?B)\sat\s+([\d.]+)\s+([KMGT]?i?B)/s\s+ETA\s+(\d{2}:\d{2})",
+            line_text,
+        )
+        if progress_match and progress_callback:
+            percentage = float(progress_match.group(1))
+            downloaded_str = progress_match.group(2) + " " + progress_match.group(3)
+            speed_str = progress_match.group(5) + " " + progress_match.group(6)
+            eta = int(progress_match.group(7))
+            await progress_callback({
+                "status": "downloading",
+                "percentage": percentage,
+                "downloaded": downloaded_str,
+                "total": None,  # We don't have total from this line format
+                "speed": speed_str,
+                "eta": eta,
+            })
+        elif progress_match and not progress_callback:
+            logger.debug("yt-dlp progress | %s", line_text)
+
     stdout, stderr = await process.communicate()
+    stderr_text = stderr.decode().strip() or stderr_data.decode().strip()
     if process.returncode != 0:
-        error_text = stderr.decode().strip() or stdout.decode().strip() or "yt-dlp failed"
+        error_text = stderr_text or stdout.decode().strip() or "yt-dlp failed"
         logger.warning(
             "yt-dlp command failed | cwd=%s command=%s error=%s",
             cwd,
@@ -53,7 +90,7 @@ async def _run_command(command: list[str], cwd: Path | None = None) -> tuple[str
             error_text.splitlines()[0],
         )
         raise RuntimeError(error_text)
-    return stdout.decode().strip(), stderr.decode().strip()
+    return stdout.decode().strip(), stderr_text
 
 
 def _is_audio_only(format_note: str | None) -> bool:
@@ -228,6 +265,7 @@ async def download_quick_youtube(
     option: DownloadOption,
     settings: Settings,
     work_dir: Path,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> DownloadArtifact:
     info = await probe_url(parsed_input, settings)
     work_dir = work_dir.resolve()
@@ -267,7 +305,7 @@ async def download_quick_youtube(
         option.option_id,
         work_dir,
     )
-    await _run_command(command, cwd=work_dir)
+    await _run_command(command, cwd=work_dir, progress_callback=progress_callback)
     file_path = _pick_downloaded_file(work_dir)
     logger.info(
         "Quick YouTube download complete | file=%s bytes=%s send_type=%s",
@@ -289,6 +327,7 @@ async def download_selected_format(
     info: dict,
     settings: Settings,
     work_dir: Path,
+    progress_callback: Callable[[dict], Awaitable[None]] | None = None,
 ) -> DownloadArtifact:
     work_dir = work_dir.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -343,7 +382,7 @@ async def download_selected_format(
         send_type,
         work_dir,
     )
-    await _run_command(command, cwd=work_dir)
+    await _run_command(command, cwd=work_dir, progress_callback=progress_callback)
     file_path = _pick_downloaded_file(work_dir)
     logger.info(
         "yt-dlp format download complete | file=%s bytes=%s send_type=%s",
