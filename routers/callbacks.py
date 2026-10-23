@@ -161,6 +161,7 @@ async def request_callback(
         safe_url_label(stored.parsed_input.source_url),
     )
 
+    error_occurred = False
     try:
         # Menampung artefak yang akan diupload (bisa 1 file atau banyak file)
         artifacts_to_upload: list[DownloadArtifact] = []
@@ -281,6 +282,16 @@ async def request_callback(
                 )
 
     except Exception as exc:  # pylint: disable=broad-exception-caught
+        error_occurred = True
+        err_lower = str(exc).lower()
+        # Map specific error patterns to user‑friendly messages
+        if "tiktok api fallback returned empty data" in err_lower:
+            err_msg = "TikTok blocked the request. Try again later or use another link."
+        elif "403" in err_lower:
+            err_msg = "TikTok returned 403 Forbidden – the link may be restricted or need cookies."
+        else:
+            err_msg = text.DOWNLOAD_FAILED
+
         logger.exception(
             "Request action failed | user=%s token=%s type=%s option=%s",
             query.from_user.id,
@@ -288,11 +299,13 @@ async def request_callback(
             stored.request_type,
             option.option_id,
         )
-        await query.message.edit_text(text.DOWNLOAD_FAILED)
+        await query.message.edit_text(err_msg)
     finally:
         request_store.delete(stored.token)
         logger.info("Cleaned request state | token=%s", stored.token)
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
+        # Only delete the message if no error occurred, so the user can see the error
+        if not error_occurred:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
