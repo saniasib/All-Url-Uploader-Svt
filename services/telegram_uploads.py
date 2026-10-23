@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 
 from aiogram import Bot
-from aiogram.types import FSInputFile, Message
+from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAnimation, InputMediaAudio, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from services.media import audio_duration, video_metadata, video_note_metadata
@@ -115,3 +115,102 @@ async def upload_artifact(
         )
     )
     artifact.path.unlink(missing_ok=True)
+
+
+async def upload_artifacts_batch(
+    *,
+    bot: Bot,
+    status_message: Message,
+    source_message: Message,
+    artifacts: list[DownloadArtifact],
+    thumbnail_paths: list[str | None],
+    started_at: datetime,
+) -> None:
+    """
+    Batch upload artifacts using media groups when supported.
+    Falls back to individual upload for unsupported combinations.
+    """
+    if not artifacts:
+        return
+
+    # Group artifacts by compatible send_types, preserve original thumbnail paths
+    photos = []
+    videos = []
+    others = []
+
+    for art, thumb_path in zip(artifacts, thumbnail_paths):
+        thumb = _thumb_file(thumb_path)
+        if art.send_type == "photo":
+            photos.append((art, thumb, thumb_path))
+        elif art.send_type == "video":
+            videos.append((art, thumb, thumb_path))
+        else:
+            others.append((art, thumb, thumb_path))
+
+    upload_started = datetime.now()
+    total_uploaded = 0
+
+    # Helper: send a media group batch
+    async def send_batch(media_items, chat_action_sender, is_photo=True):
+        nonlocal total_uploaded
+        if not media_items:
+            return
+        for i in range(0, len(media_items), 10):
+            batch = media_items[i:i+10]
+            media = []
+            for idx, (art, thumb, _) in enumerate(batch):
+                if is_photo:
+                    media.append(InputMediaPhoto(
+                        media=FSInputFile(art.path),
+                        caption=art.caption if idx == 0 and i == 0 else "",
+                    ))
+                else:
+                    width, height, duration = video_metadata(art.path) if art.path.exists() else (0, 0, 0)
+                    media.append(InputMediaVideo(
+                        media=FSInputFile(art.path),
+                        caption=art.caption if idx == 0 and i == 0 else "",
+                        duration=duration,
+                        width=width,
+                        height=height,
+                        supports_streaming=True,
+                        thumbnail=thumb,
+                    ))
+            async with chat_action_sender(bot=bot, chat_id=source_message.chat.id):
+                await source_message.reply_media_group(media=media)
+            # Clean up batch
+            for art, _, _ in batch:
+                art.path.unlink(missing_ok=True)
+            total_uploaded += len(batch)
+
+    # Process photos in batches of 10 (must be ≥2 items for media group)
+    if len(photos) >= 2:
+        await send_batch(photos, ChatActionSender.upload_photo, is_photo=True)
+        photos = []  # Mark as sent
+
+    # Process videos in batches of 10 (must be ≥2 items for media group)
+    if len(videos) >= 2:
+        await send_batch(videos, ChatActionSender.upload_video, is_photo=False)
+        videos = []  # Mark as sent
+
+    # Process remaining (others + singles) individually
+    for art, thumb, thumb_path in others + photos + videos:
+        await upload_artifact(
+            bot=bot,
+            status_message=status_message,
+            source_message=source_message,
+            artifact=art,
+            thumbnail_path=thumb_path,
+            started_at=started_at,
+        )
+        total_uploaded += 1
+
+    # Final DONE message (matching upload_artifact behavior)
+    if total_uploaded > 0:
+        upload_seconds = int((datetime.now() - upload_started).total_seconds())
+        download_seconds = int((datetime.now() - started_at).total_seconds()) - upload_seconds
+        await status_message.edit_text(
+            text.DONE.format(
+                download_seconds=max(0, download_seconds),
+                upload_seconds=upload_seconds,
+            )
+        )

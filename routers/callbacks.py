@@ -242,23 +242,43 @@ async def request_callback(
                 else:
                     raise e
 
-        # Upload seluruh artifact secara berurutan
-        for art in artifacts_to_upload:
-            await upload_artifact(
+        # Upload artifacts: batch if multiple, else single
+        if len(artifacts_to_upload) > 1:
+            thumb_path = thumbnail_store.get(query.from_user.id)
+            thumb_list = [thumb_path] * len(artifacts_to_upload)
+            await upload_artifacts_batch(
                 bot=query.bot,
                 status_message=query.message,
                 source_message=query.message.reply_to_message or query.message,
-                artifact=art,
-                thumbnail_path=thumbnail_store.get(query.from_user.id),
+                artifacts=artifacts_to_upload,
+                thumbnail_paths=thumb_list,
                 started_at=started_at,
             )
-            logger.info(
-                "Completed upload for file | user=%s token=%s file=%s send_type=%s",
-                query.from_user.id,
-                stored.token,
-                art.file_name,
-                art.send_type,
-            )
+            for art in artifacts_to_upload:
+                logger.info(
+                    "Completed upload for file | user=%s token=%s file=%s send_type=%s",
+                    query.from_user.id,
+                    stored.token,
+                    art.file_name,
+                    art.send_type,
+                )
+        else:
+            for art in artifacts_to_upload:
+                await upload_artifact(
+                    bot=query.bot,
+                    status_message=query.message,
+                    source_message=query.message.reply_to_message or query.message,
+                    artifact=art,
+                    thumbnail_path=thumbnail_store.get(query.from_user.id),
+                    started_at=started_at,
+                )
+                logger.info(
+                    "Completed upload for file | user=%s token=%s file=%s send_type=%s",
+                    query.from_user.id,
+                    stored.token,
+                    art.file_name,
+                    art.send_type,
+                )
 
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception(
