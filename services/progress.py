@@ -34,16 +34,36 @@ def format_download_progress(
     downloaded: int,
     total: int,
     started_at: float,
+    percentage: float | None = None,
 ) -> str:
     elapsed = max(time.time() - started_at, 1e-6)
-    percentage = min(downloaded / total, 1) if total else 0
-    bars = math.floor(percentage * 20)
+    
+    # If percentage is explicitly provided (e.g., from gallery-dl), use it
+    if percentage is not None:
+        pct = min(max(percentage / 100, 0), 1)
+        # Estimate downloaded from total if available
+        if total:
+            downloaded = int(total * pct)
+    else:
+        pct = min(downloaded / total, 1) if total else 0
+    
+    bars = math.floor(pct * 20)
     speed = downloaded / elapsed
     eta = int((total - downloaded) / speed) if speed and total else 0
-    return (
-        f"Downloading <b>{file_name}</b>\n\n"
-        f"[{'#' * bars}{'.' * (20 - bars)}] {percentage * 100:.1f}%\n"
-        f"{humanbytes(downloaded)} of {humanbytes(total)}\n"
-        f"Speed: {humanbytes(speed)}/s\n"
-        f"ETA: {format_duration(eta)}"
-    )
+    
+    # If total is unknown (0), show percentage-only progress without misleading byte counts
+    if total:
+        return (
+            f"Downloading <b>{file_name}</b>\n\n"
+            f"[{'#' * bars}{'.' * (20 - bars)}] {pct * 100:.1f}%\n"
+            f"{humanbytes(downloaded)} of {humanbytes(total)}\n"
+            f"Speed: {humanbytes(speed)}/s\n"
+            f"ETA: {format_duration(eta)}"
+        )
+    else:
+        return (
+            f"Downloading <b>{file_name}</b>\n\n"
+            f"[{'#' * bars}{'.' * (20 - bars)}] {pct * 100:.1f}%\n"
+            f"Speed: {humanbytes(speed)}/s\n"
+            f"ETA: {format_duration(eta)}"
+        )

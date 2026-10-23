@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from services.progress import format_download_progress
+import math
+from services.progress import format_download_progress, format_duration
 from datetime import datetime
 
 from aiogram import Router
@@ -21,7 +22,67 @@ from utils.logging_config import safe_url_label
 from utils.models import DownloadArtifact, DownloadOption, StoredRequest
 
 async def _update_progress(query: CallbackQuery, data: dict) -> None:
-    await query.message.edit_text(format_download_progress(data))
+    file_name = data.get("file_name", "downloading...")
+    started_at = data.get("started_at", datetime.now().timestamp())
+    
+    # Handle different callback formats:
+    # 1. yt-dlp: sends percentage + total (as string like "1.23 MiB")
+    # 2. gallery-dl: sends only percentage
+    # 3. direct: sends downloaded (bytes) + total (bytes)
+    
+    downloaded = 0
+    total = 0
+    percentage = data.get("percentage")
+    
+    if "downloaded" in data:
+        # Direct download or other: raw byte values
+        downloaded = int(data["downloaded"]) if data["downloaded"] else 0
+        total = int(data["total"]) if data.get("total") else 0
+    elif "total" in data:
+        # yt-dlp: total as string, percentage provided
+        total = _parse_bytes(data["total"])
+        if percentage:
+            downloaded = int(total * float(percentage) / 100)
+        else:
+            downloaded = 0
+    elif percentage is not None:
+        # gallery-dl: only percentage, no size info
+        percentage = float(percentage)
+        total = 0
+        downloaded = 0
+    else:
+        total = 0
+        downloaded = 0
+    
+    await query.message.edit_text(
+        format_download_progress(
+            file_name=file_name,
+            downloaded=downloaded,
+            total=total,
+            started_at=started_at,
+            percentage=percentage,
+        )
+    )
+
+
+def _parse_bytes(size_str: str) -> int:
+    """Parse '50.5 MiB' style strings to bytes."""
+    if not size_str:
+        return 0
+    size_str = size_str.strip().upper()
+    units = {"B": 1, "KIB": 1024, "MIB": 1024**2, "GIB": 1024**3, "TIB": 1024**4,
+             "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4}
+    for unit, multiplier in units.items():
+        if size_str.endswith(unit):
+            try:
+                return int(float(size_str[:-len(unit)].strip()) * multiplier)
+            except (ValueError, IndexError):
+                return 0
+    # No unit suffix, assume bytes
+    try:
+        return int(float(size_str))
+    except ValueError:
+        return 0
 
 router = Router(name="callbacks")
 logger = logging.getLogger(__name__)
@@ -79,9 +140,13 @@ async def request_callback(
         return
 
     started_at = datetime.now()
+    started_ts = started_at.timestamp()
     work_dir = request_store.work_directory(stored.token)
 
     async def progress_cb(data: dict) -> None:
+        data["started_at"] = started_ts
+        if "file_name" not in data:
+            data["file_name"] = file_name
         await _update_progress(query, data)
 
     file_name = stored.parsed_input.custom_file_name or "downloaded-file"

@@ -36,46 +36,35 @@ async def _run_command(
 
     stdout_lines = []
     stderr_lines = []
-    while True:
-        # Read from stdout
-        stdout_line = await process.stdout.readline()
-        if stdout_line:
-            line_text = stdout_line.decode(errors="replace").strip()
-            stdout_lines.append(line_text)
-            # Parse gallery-dl progress from stdout
-            # Example: "Downloading https://... 10%"
-            if progress_callback and "Downloading" in line_text and "%" in line_text:
+
+    async def read_stream(stream, lines_list, is_stdout=True):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            line_text = line.decode(errors="replace").strip()
+            lines_list.append(line_text)
+            if progress_callback and is_stdout and "Downloading" in line_text and "%" in line_text:
                 try:
-                    # Extract percentage from line like "Downloading URL 10%"
                     parts = line_text.split()
-                    for i, part in enumerate(parts):
+                    for part in parts:
                         if part.endswith('%'):
-                            percentage_str = part[:-1]
-                            percentage = float(percentage_str)
+                            percentage = float(part[:-1])
                             await progress_callback({
                                 "status": "downloading",
                                 "percentage": percentage,
-                                "downloaded": None,  # gallery-dl doesn't give explicit downloaded size in this format
-                                "total": None,
-                                "speed": None,
-                                "eta": None,
                             })
                             break
                 except (ValueError, IndexError):
-                    pass  # Ignore parsing errors
-        
-        # Read from stderr
-        stderr_line = await process.stderr.readline()
-        if stderr_line:
-            line_text = stderr_line.decode(errors="replace").strip()
-            stderr_lines.append(line_text)
+                    pass
 
-        # Break when both streams are empty and process ended
-        if not stdout_line and not stderr_line:
-            if process.returncode is not None:
-                break
-            # Small sleep to prevent busy waiting
-            await asyncio.sleep(0.01)
+    # Read both streams concurrently to avoid deadlock
+    await asyncio.gather(
+        read_stream(process.stdout, stdout_lines, is_stdout=True),
+        read_stream(process.stderr, stderr_lines, is_stdout=False),
+    )
+
+    await process.wait()
 
     stdout_text = "\n".join(stdout_lines).strip()
     stderr_text = "\n".join(stderr_lines).strip()

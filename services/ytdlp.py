@@ -65,14 +65,13 @@ async def _run_command(
         )
         if progress_match and progress_callback:
             percentage = float(progress_match.group(1))
-            downloaded_str = progress_match.group(2) + " " + progress_match.group(3)
+            total_str = progress_match.group(2) + " " + progress_match.group(3)
             speed_str = progress_match.group(5) + " " + progress_match.group(6)
             eta = int(progress_match.group(7))
             await progress_callback({
                 "status": "downloading",
                 "percentage": percentage,
-                "downloaded": downloaded_str,
-                "total": None,  # We don't have total from this line format
+                "total": total_str,  # Total file size from "of X"
                 "speed": speed_str,
                 "eta": eta,
             })
